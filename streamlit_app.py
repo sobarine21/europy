@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from esma_data_py import EsmaDataLoader
 
-# App config
+# Page config
 st.set_page_config(page_title="ESMA Regulatory Data Explorer", layout="wide")
 st.title("📊 ESMA Regulatory Data Explorer")
 
@@ -13,31 +13,46 @@ Explore datasets from **ESMA (European Securities and Markets Authority)**:
 - 📉 SSR Short Selling Reports
 """)
 
-# Initialize ESMA data loader
+# Initialize ESMA Data Loader
 edl = EsmaDataLoader()
 
-# Sidebar
+# Sidebar selection
 dataset = st.sidebar.radio("Choose a dataset", ["MiFID", "FIRDS", "SSR"])
 
+# ---------------- MiFID II ----------------
 if dataset == "MiFID":
     st.header("🧾 MiFID II Dataset")
+
     try:
         files = edl.load_mifid_file_list()
         files["publication_date"] = pd.to_datetime(files["publication_date"])
-        date = st.date_input("Select publication date", value=files["publication_date"].max())
-        filtered = files[files["publication_date"] == pd.to_datetime(date)]
-        st.dataframe(filtered)
-        index = st.selectbox("Select file row", filtered.index)
-        row = filtered.loc[index]
 
-        if st.button("Download & Preview File"):
-            df = edl.download_file(row.download_link)
-            st.write(df.head(100))
-            st.download_button("📥 Download CSV", df.to_csv(index=False), file_name="mifid_data.csv")
+        unique_dates = sorted(files["publication_date"].unique(), reverse=True)
+        selected_date = st.date_input("Select publication date", value=unique_dates[0])
+
+        filtered = files[files["publication_date"] == pd.to_datetime(selected_date)]
+
+        if filtered.empty:
+            st.warning("No files found for the selected date.")
+        else:
+            st.dataframe(filtered)
+            file_options = filtered["file_name"].tolist()
+            selected_file = st.selectbox("Select file to download", file_options)
+
+            row = filtered[filtered["file_name"] == selected_file].iloc[0]
+
+            if st.button("📥 Download & Preview File"):
+                if "download_link" in row and row["download_link"]:
+                    df = edl.download_file(row["download_link"])
+                    st.write(df.head(100))
+                    st.download_button("⬇ Download CSV", df.to_csv(index=False), file_name="mifid_data.csv")
+                else:
+                    st.error("Download link not available for this row.")
 
     except Exception as e:
         st.error(f"Error: {e}")
 
+# ---------------- FIRDS ----------------
 elif dataset == "FIRDS":
     st.header("📂 FIRDS (Instrument Reference Data)")
     try:
@@ -46,20 +61,25 @@ elif dataset == "FIRDS":
 
         instrument = st.text_input("Filter by instrument type (optional)")
         if instrument:
-            filtered = files[files["instrument_type"].str.contains(instrument.upper(), na=False)]
-            st.dataframe(filtered)
+            files = files[files["instrument_type"].str.contains(instrument.upper(), na=False)]
 
-        index = st.selectbox("Select file row", files.index)
-        row = files.loc[index]
+        file_options = files["file_name"].tolist()
+        selected_file = st.selectbox("Select file to download", file_options)
 
-        if st.button("Download & Preview File"):
-            df = edl.download_file(row.download_link)
-            st.write(df.head(100))
-            st.download_button("📥 Download CSV", df.to_csv(index=False), file_name="firds_data.csv")
+        row = files[files["file_name"] == selected_file].iloc[0]
+
+        if st.button("📥 Download & Preview File"):
+            if "download_link" in row and row["download_link"]:
+                df = edl.download_file(row["download_link"])
+                st.write(df.head(100))
+                st.download_button("⬇ Download CSV", df.to_csv(index=False), file_name="firds_data.csv")
+            else:
+                st.error("Download link not available for this row.")
 
     except Exception as e:
         st.error(f"Error: {e}")
 
+# ---------------- SSR ----------------
 elif dataset == "SSR":
     st.header("📉 SSR (Short Selling Exemptions)")
     try:
@@ -67,8 +87,9 @@ elif dataset == "SSR":
         issuer = st.text_input("Filter by Issuer Name (optional)")
         if issuer:
             df = df[df["issuer_name"].str.contains(issuer, case=False, na=False)]
+
         st.dataframe(df.head(100))
-        st.download_button("📥 Download CSV", df.to_csv(index=False), file_name="ssr_data.csv")
+        st.download_button("⬇ Download CSV", df.to_csv(index=False), file_name="ssr_data.csv")
 
     except Exception as e:
         st.error(f"Error: {e}")
