@@ -1,3 +1,4 @@
 streamlit
 pandas
 esma-data-py @ git+https://github.com/European-Securities-Markets-Authority/esma_data_py.git
+bs4
