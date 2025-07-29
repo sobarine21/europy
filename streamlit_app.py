@@ -62,7 +62,7 @@ elif dataset == "FIRDS":
             if "instrument_type" in files.columns:
                 instr_filter = st.text_input("Filter by instrument_type (e.g. SHRS)")
                 if instr_filter:
-                    files = files[files["instrument_type"].str.contains(instr_filter.upper(), na=False))
+                    files = files[files["instrument_type"].str.contains(instr_filter.upper(), na=False)]
             else:
                 st.info("`instrument_type` not available. You can filter by ISIN or CFI code.")
             isin = st.text_input("Filter by ISIN (optional)")
