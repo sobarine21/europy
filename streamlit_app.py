@@ -28,7 +28,7 @@ if dataset == "MiFID":
         if files.empty:
             st.warning("No MiFID file metadata found.")
         else:
-            files["publication_date"] = pd.to_datetime(files["publication_date"])
+            # Normalize to naive datetime (drop timezone) files["publication_date"] = pd.to_datetime(files["publication_date"]).dt.tz_localize(None)
             show_schema(files, "MiFID File List")
 
             # Date range filter
