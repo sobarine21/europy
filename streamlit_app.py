@@ -2,27 +2,25 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 from esma_data_py import EsmaDataLoader
-import difflib
+from datetime import datetime
 
-# Page setup
 st.set_page_config(page_title="ESMA Advanced Explorer", layout="wide")
-st.title("📊 ESMA Regulatory Data Explorer – Advanced Edition")
+st.title("📊 ESMA Regulatory Data Explorer – Production Edition")
 
-st.markdown("""
-This application uses **esma_data_py** to explore:
-- 🧾 MiFID II
-- 📂 FIRDS
-- 📉 SSR
-Includes safe filtering, visualizations, summaries, and error handling.
-""")
-
-# Initialize data loader
 edl = EsmaDataLoader()
 
-# Sidebar dataset selector
-dataset = st.sidebar.radio("Select dataset", ["MiFID", "FIRDS", "SSR"])
+# --- Utility Function ---
+def show_schema(df, label):
+    with st.expander(f"🧬 Schema: {label}"):
+        st.dataframe(pd.DataFrame({
+            "Column": df.columns,
+            "Type": df.dtypes.astype(str)
+        }))
 
-# MiFID II View
+# --- Sidebar ---
+dataset = st.sidebar.radio("Select Dataset", ["MiFID", "FIRDS", "SSR"])
+
+# --- MiFID Section ---
 if dataset == "MiFID":
     st.header("🧾 MiFID II")
     try:
@@ -30,86 +28,75 @@ if dataset == "MiFID":
         if files.empty:
             st.warning("No MiFID file metadata found.")
         else:
-            files["publication_date"] = files["publication_date"].astype(str)
-            dates = sorted(files["publication_date"].unique(), reverse=True)
-            sel = st.selectbox("Select publication date", dates)
-            filtered = files[files["publication_date"] == sel]
+            files["publication_date"] = pd.to_datetime(files["publication_date"])
+            show_schema(files, "MiFID File List")
 
-            if filtered.empty:
-                st.warning("No files on that date.")
-            else:
-                st.dataframe(filtered)
-                file_choice = st.selectbox("Choose file to download", filtered["file_name"])
-                row = filtered[filtered["file_name"] == file_choice].iloc[0]
-                url = row.get("download_link") or row.get("downloadUrl")
-                if st.button("📥 Download & Analyze"):
+            # Date range filter
+            min_date, max_date = files["publication_date"].min(), files["publication_date"].max()
+            date_range = st.date_input("Filter by publication date range", [min_date, max_date])
+            filtered = files[(files["publication_date"] >= pd.to_datetime(date_range[0])) & 
+                             (files["publication_date"] <= pd.to_datetime(date_range[1]))]
+
+            st.subheader(f"{len(filtered)} files found")
+            st.dataframe(filtered)
+
+            selected_files = st.multiselect("Select files to download and analyze", filtered["file_name"])
+            if st.button("📥 Download & Analyze Selected"):
+                combined = pd.DataFrame()
+                for fname in selected_files:
+                    row = filtered[filtered["file_name"] == fname].iloc[0]
+                    url = row.get("download_link") or row.get("downloadUrl")
                     df = edl.download_file(url)
-                    st.subheader("Preview")
-                    st.dataframe(df.head(50))
-                    st.download_button("⬇ Download CSV", df.to_csv(index=False), file_name="mifid.csv")
-                    st.subheader("Stats")
-                    st.write(df.describe(include="all"))
-                    cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
-                    if cols:
-                        col = st.selectbox("Show value counts for column", cols)
-                        st.dataframe(df[col].value_counts().head(20).rename_axis(col).reset_index(name="count"))
+                    df["source_file"] = fname
+                    combined = pd.concat([combined, df], ignore_index=True)
+
+                if not combined.empty:
+                    st.subheader("Preview Combined Data")
+                    search_term = st.text_input("🔍 Search within preview")
+                    if search_term:
+                        combined = combined[combined.astype(str).apply(lambda x: x.str.contains(search_term, case=False, na=False)).any(axis=1)]
+                    st.dataframe(combined.head(100))
+                    st.download_button("⬇ Download Combined CSV", combined.to_csv(index=False), file_name="mifid_combined.csv")
+                    show_schema(combined, "Combined MiFID Data")
     except Exception as e:
         st.error(f"MiFID error: {e}")
 
-# FIRDS View
+# --- FIRDS Section ---
 elif dataset == "FIRDS":
     st.header("📂 FIRDS Instrument Reference Data")
     try:
         files = edl.load_latest_files()
         if files.empty:
-            st.warning("No FIRDS metadata available.")
+            st.warning("No FIRDS data available.")
         else:
-            st.dataframe(files.head(50))
+            show_schema(files, "FIRDS Metadata")
 
-            # Try to find 'instrument_type' or a similar column
-            if "instrument_type" in files.columns:
-                instr_filter = st.text_input("Filter by instrument_type (e.g. SHRS)")
-                if instr_filter:
-                    files = files[files["instrument_type"].str.contains(instr_filter.upper(), na=False)]
-            else:
-                # Try fuzzy matching to suggest a similar column
-                possible_cols = difflib.get_close_matches("instrument_type", files.columns, n=1, cutoff=0.6)
-                st.info("`instrument_type` not available. You can filter by ISIN or CFI code.")
-                st.caption(f"Available columns: {', '.join(files.columns)}")
-                if possible_cols:
-                    st.warning(f"Did you mean `{possible_cols[0]}`?")
-
-            # ISIN Filter
             isin = st.text_input("Filter by ISIN (optional)")
-            if isin and "isin" in files.columns:
-                files = files[files["isin"].str.contains(isin.upper(), na=False)]
+            cfi = st.text_input("Filter by CFI Code (optional)")
 
-            # CFI Filter
-            cfi = st.text_input("Filter by CFI code (optional)")
-            if cfi and "cfi_code" in files.columns:
+            if isin:
+                files = files[files["isin"].str.contains(isin.upper(), na=False)]
+            if cfi:
                 files = files[files["cfi_code"].str.contains(cfi.upper(), na=False)]
 
-            # Show filtered result
-            if files.empty:
-                st.warning("No matching FIRDS records found.")
-            else:
-                st.subheader(f"{len(files)} records found")
-                st.dataframe(files.head(100))
-                st.download_button("⬇ Download CSV", files.to_csv(index=False), file_name="firds.csv")
+            st.subheader(f"{len(files)} records found")
+            st.dataframe(files.head(100))
+            st.download_button("⬇ Download FIRDS CSV", files.to_csv(index=False), file_name="firds_filtered.csv")
 
-                # Visualization if instrument_type available
-                if "instrument_type" in files.columns:
-                    cnt = files["instrument_type"].value_counts().reset_index()
-                    cnt.columns = ["instrument_type", "count"]
-                    st.subheader("Instrument Type Breakdown")
-                    st.altair_chart(
-                        alt.Chart(cnt).mark_bar().encode(x="instrument_type", y="count"),
-                        use_container_width=True
-                    )
+            # Profile Summary Table
+            if not files.empty:
+                summary = files.groupby("isin", as_index=False).agg({
+                    "issuer_name": "first",
+                    "maturity_date": "first",
+                    "cfi_code": "first"
+                })
+                st.subheader("📋 Instrument Summary")
+                st.dataframe(summary.head(50))
+                st.download_button("⬇ Download Summary", summary.to_csv(index=False), file_name="firds_summary.csv")
     except Exception as e:
         st.error(f"FIRDS error: {e}")
 
-# SSR View
+# --- SSR Section ---
 elif dataset == "SSR":
     st.header("📉 SSR Short Selling Exemptions")
     try:
@@ -117,24 +104,43 @@ elif dataset == "SSR":
         if df.empty:
             st.warning("No SSR data.")
         else:
-            issuer = st.text_input("Filter by issuer name")
+            show_schema(df, "SSR Data")
+            issuer = st.text_input("Filter by Issuer Name (optional)")
             if issuer:
                 df = df[df["issuer_name"].str.contains(issuer, case=False, na=False)]
-            if df.empty:
-                st.warning("No SSR records match filter.")
-            else:
-                st.dataframe(df.head(100))
-                st.download_button("⬇ Download CSV", df.to_csv(index=False), file_name="ssr.csv")
-                top = df["issuer_name"].value_counts().head(10).reset_index()
-                top.columns = ["Issuer", "Count"]
-                st.subheader("Top Issuers by Count")
-                st.altair_chart(
-                    alt.Chart(top).mark_bar().encode(x="Issuer", y="Count"),
-                    use_container_width=True
+
+            st.subheader(f"{len(df)} records")
+            st.dataframe(df.head(100))
+            st.download_button("⬇ Download SSR CSV", df.to_csv(index=False), file_name="ssr_filtered.csv")
+
+            # Time trend
+            if "publication_date" in df.columns:
+                df["publication_date"] = pd.to_datetime(df["publication_date"], errors="coerce")
+                df["month"] = df["publication_date"].dt.to_period("M").astype(str)
+                trend = df.groupby("month").size().reset_index(name="count")
+                chart = alt.Chart(trend).mark_line(point=True).encode(
+                    x=alt.X("month:T", title="Month"),
+                    y=alt.Y("count:Q", title="Number of Exemptions")
                 )
+                st.subheader("📈 SSR Monthly Trend")
+                st.altair_chart(chart, use_container_width=True)
     except Exception as e:
         st.error(f"SSR error: {e}")
 
-# Footer
+# --- Data Freshness Report ---
 st.markdown("---")
+st.subheader("📅 Data Freshness")
+try:
+    mifid_files = edl.load_mifid_file_list()
+    mifid_latest = pd.to_datetime(mifid_files["publication_date"]).max()
+    st.write(f"Latest MiFID publication date: **{mifid_latest.date()}** ({(datetime.now() - mifid_latest).days} days ago)")
+except: pass
+
+try:
+    firds_files = edl.load_latest_files()
+    if "publication_date" in firds_files.columns:
+        firds_latest = pd.to_datetime(firds_files["publication_date"]).max()
+        st.write(f"Latest FIRDS metadata date: **{firds_latest.date()}** ({(datetime.now() - firds_latest).days} days ago)")
+except: pass
+
 st.markdown("Built with ❤️ using Streamlit & `esma_data_py`")
